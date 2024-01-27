@@ -26,5 +26,14 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed to create the ddb table: %v", err)
 		}
+		//newRecord := QueueRecord.NewQRecord("234")
+		//err = ddbclient.AddRecord(newRecord)
+		//if err != nil {
+		//log.Fatalf("error: %v", err)
+		//}
+		err = ddbclient.EnqueueRecord("234")
+		if err != nil {
+			log.Fatalf("enqueue error: %v", err)
+		}
 	}
 }

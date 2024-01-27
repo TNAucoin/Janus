@@ -16,18 +16,49 @@ import (
 // LocalTableInput is a variable that represents the input parameters for creating a local DynamoDB table.
 // It is a function that takes a tableName string parameter and returns a pointer to dynamodb.CreateTableInput.
 // Make sure to have a valid DDBConnection object with a valid Client, Region, and TableName before using LocalTableInput.
-var LocalTableInput = func(tableName string) *dynamodb.CreateTableInput {
+var LocalTableInput = func(tableName string, indexName string) *dynamodb.CreateTableInput {
 	return &dynamodb.CreateTableInput{
 		AttributeDefinitions: []types.AttributeDefinition{
 			{
 				AttributeName: aws.String("id"),
 				AttributeType: types.ScalarAttributeTypeS,
 			},
+			{
+				AttributeName: aws.String("last_updated_timestamp"),
+				AttributeType: types.ScalarAttributeTypeS,
+			},
+			{
+				AttributeName: aws.String("queued"),
+				AttributeType: types.ScalarAttributeTypeN,
+			},
 		},
 		KeySchema: []types.KeySchemaElement{
 			{
 				AttributeName: aws.String("id"),
 				KeyType:       types.KeyTypeHash,
+			},
+		},
+		GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
+			{
+				IndexName: aws.String(indexName),
+				KeySchema: []types.KeySchemaElement{
+					{
+						AttributeName: aws.String("queued"),
+						KeyType:       types.KeyTypeHash,
+					},
+					{
+						AttributeName: aws.String("last_updated_timestamp"),
+						KeyType:       types.KeyTypeRange,
+					},
+				},
+				Projection: &types.Projection{
+					NonKeyAttributes: nil,
+					ProjectionType:   types.ProjectionTypeAll,
+				},
+				ProvisionedThroughput: &types.ProvisionedThroughput{
+					ReadCapacityUnits:  aws.Int64(10),
+					WriteCapacityUnits: aws.Int64(10),
+				},
 			},
 		},
 		TableName: aws.String(tableName),
@@ -59,7 +90,7 @@ func CreateLocalTable(ddbc *DDBConnection) error {
 // createDynamoDBTable creates a DynamoDB table using the provided DDBConnection.
 // It takes the DDBConnection as a parameter and returns an error if the table creation fails.
 func createDynamoDBTable(ddbc *DDBConnection) error {
-	_, err := ddbc.Client.CreateTable(context.TODO(), LocalTableInput(ddbc.TableName))
+	_, err := ddbc.Client.CreateTable(context.TODO(), LocalTableInput(ddbc.TableName, ddbc.IndexName))
 	if err != nil {
 		log.Printf("%v", err)
 		return errors.New("failed to create table")

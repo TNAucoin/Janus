@@ -19,6 +19,7 @@ type ConfDB struct {
 	Port      int    `env:"DB_LOCAL_PORT,default=8000"`
 	TableName string `env:"DB_TABLE_NAME,required"`
 	Region    string `env:"DB_REGION,required"`
+	IndexName string `env:"DB_TABLE_INDEX_NAME,required"`
 }
 
 func New() *Conf {
