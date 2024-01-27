@@ -1,7 +1,8 @@
-<p align="center">
-  <img width="150" src="./ReadMeFiles/janus_logo.png">
-</p>
-<h1 align="center" style="margin-top: -70px">Janus</h1>
+<div align="center" width="100%" style="display: flex; justify-content: center;">
+  <img width="95" src="./ReadMeFiles/janus_logo.png">
+  <h1>Janus</h1>
+</div>
+
 
 ---
 
