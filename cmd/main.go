@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/joho/godotenv"
 	"github.com/tnaucoin/Janus/config"
 	"github.com/tnaucoin/Janus/internal/dynamo"
@@ -26,14 +27,21 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed to create the ddb table: %v", err)
 		}
-		//newRecord := QueueRecord.NewQRecord("234")
+		//newRecord := QueueRecord.NewQRecord("789")
 		//err = ddbclient.AddRecord(newRecord)
 		//if err != nil {
-		//log.Fatalf("error: %v", err)
+		//	log.Fatalf("error: %v", err)
 		//}
-		err = ddbclient.EnqueueRecord("234")
+		//err = ddbclient.EnqueueRecord("789")
+		//if err != nil {
+		//	log.Fatalf("enqueue error: %v", err)
+		//}
+		records, err := ddbclient.Peek(1)
 		if err != nil {
-			log.Fatalf("enqueue error: %v", err)
+			log.Fatalf("peek error: %v", err)
+		}
+		for _, v := range *records {
+			fmt.Println(v)
 		}
 	}
 }

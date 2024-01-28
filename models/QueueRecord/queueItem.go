@@ -1,9 +1,24 @@
 package QueueRecord
 
 import (
+	"fmt"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"time"
+	"github.com/tnaucoin/Janus/utils"
 )
+
+type QStatus int
+
+const (
+	Pending QStatus = iota
+	Ready
+	Processing
+)
+
+var QStatusToString = map[QStatus]string{
+	Pending:    "PENDING",
+	Ready:      "READY",
+	Processing: "PROCESSING",
+}
 
 type QRecord struct {
 	Id          string       `dynamodbav:"id"`
@@ -34,7 +49,7 @@ func IdToKeyExpr(id string) map[string]types.AttributeValue {
 // and assigns it to the SystemInfo field of the QRecord.
 // The returned QRecord object contains the ID, LastUpdated, and SystemInfo fields populated.
 func NewQRecord(id string) *QRecord {
-	currentTime := time.Now().Format("2006-01-02T15:04:05.000Z07:00")
+	currentTime := utils.GetCurrentTimeAWSFormatted()
 	info := newSystemInfo(id, currentTime)
 	return &QRecord{
 		Id:          id,
@@ -58,4 +73,13 @@ func newSystemInfo(id, currentTime string) *QSystemInfo {
 		Status:        "PENDING",
 		Version:       1,
 	}
+}
+
+func (qa *QSystemInfo) String() string {
+	return fmt.Sprintf("QSystemInfo: \nCreated: %s\nId: %s\nLastUpdated: %s\nQueueSelected: %t\nQueued: %d\nStatus: %s\nVersion: %d\n",
+		qa.Created, qa.Id, qa.LastUpdated, qa.QueueSelected, qa.Queued, qa.Status, qa.Version)
+}
+
+func (qr *QRecord) String() string {
+	return fmt.Sprintf("QRecord: \nId: %s\nLastUpdated: %s\n%s\n", qr.Id, qr.LastUpdated, qr.SystemInfo)
 }

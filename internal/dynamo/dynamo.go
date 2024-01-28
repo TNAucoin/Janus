@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/tnaucoin/Janus/config"
 	"github.com/tnaucoin/Janus/models/QueueRecord"
+	"github.com/tnaucoin/Janus/utils"
 )
 
 type DDBConnection struct {
@@ -62,6 +63,7 @@ func (ddbc *DDBConnection) AddRecord(record *QueueRecord.QRecord) error {
 
 func (ddbc *DDBConnection) EnqueueRecord(id string) error {
 	record, err := ddbc.getRecord(id)
+	timestamp := utils.GetCurrentTimeAWSFormatted()
 	if err != nil {
 		return err
 	}
@@ -69,6 +71,11 @@ func (ddbc *DDBConnection) EnqueueRecord(id string) error {
 	upd := expression.
 		Set(expression.Name("queued"), expression.Value(aws.Int64(1))).
 		Set(expression.Name("system_info.queued"), expression.Value(aws.Int64(1))).
+		Set(expression.Name("system_info.queue_added_timestamp"), expression.Value(timestamp)).
+		Set(expression.Name("system_info.queue_selected"), expression.Value(false)).
+		Set(expression.Name("system_info.status"), expression.Value(aws.String(QueueRecord.QStatusToString[QueueRecord.Ready]))).
+		Set(expression.Name("last_updated_timestamp"), expression.Value(timestamp)).
+		Set(expression.Name("system_info.last_updated_timestamp"), expression.Value(timestamp)).
 		Add(expression.Name("system_info.version"), expression.Value(aws.Int64(1)))
 	cond := expression.Equal(
 		expression.Name("system_info.version"),
@@ -91,6 +98,31 @@ func (ddbc *DDBConnection) EnqueueRecord(id string) error {
 		return err
 	}
 	return nil
+}
+
+func (ddbc *DDBConnection) Peek(priority int64) (*[]QueueRecord.QRecord, error) {
+	cond := expression.Equal(
+		expression.Name("queued"),
+		expression.Value(aws.Int64(priority)),
+	)
+	expr, err := expression.NewBuilder().WithCondition(cond).Build()
+	resp, err := ddbc.Client.Query(context.TODO(), &dynamodb.QueryInput{
+		TableName:                 aws.String(ddbc.TableName),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		IndexName:                 aws.String(ddbc.IndexName),
+		KeyConditionExpression:    expr.Condition(),
+		Limit:                     aws.Int32(250),
+		ScanIndexForward:          aws.Bool(true),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var records []QueueRecord.QRecord
+	if err := attributevalue.UnmarshalListOfMaps(resp.Items, &records); err != nil {
+		return nil, err
+	}
+	return &records, nil
 }
 
 func (ddbc *DDBConnection) getRecord(id string) (*QueueRecord.QRecord, error) {
