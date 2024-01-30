@@ -2,17 +2,16 @@ package dynamo
 
 import (
 	"context"
-	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 	"github.com/tnaucoin/Janus/config"
 	"github.com/tnaucoin/Janus/models/QueueRecord"
 	"github.com/tnaucoin/Janus/utils"
-	"log"
 	"time"
 )
 
@@ -21,6 +20,7 @@ type DDBConnection struct {
 	Region    string
 	TableName string
 	IndexName string
+	logger    zerolog.Logger
 }
 
 // New is a function that creates a new instance of DDBConnection, which represents a connection to Amazon DynamoDB.
@@ -30,7 +30,7 @@ type DDBConnection struct {
 // - hostUrl: a string representing the hostname or IP address of the DynamoDB server.
 // - port: an integer representing the port number on which the DynamoDB server is listening.
 // The function returns a pointer to DDBConnection and an error if any occurred during creation.
-func New(conf config.ConfDB) (*DDBConnection, error) {
+func New(conf config.ConfDB, logger zerolog.Logger) (*DDBConnection, error) {
 	var db *dynamodb.Client
 	url, err := createDynamoDbURL(conf.Host, conf.Port)
 	if err != nil {
@@ -46,6 +46,7 @@ func New(conf config.ConfDB) (*DDBConnection, error) {
 		Region:    conf.Region,
 		TableName: conf.TableName,
 		IndexName: conf.IndexName,
+		logger:    logger,
 	}, nil
 }
 
@@ -181,16 +182,16 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 			// This item is visible, check to see if it needs to be processed
 			// If False, this value hasn't been processed yet.
 			if !item.SystemInfo.QueueSelected {
-				fmt.Printf("PEEK: ID: %s, M: %s\n", item.Id, item.LastUpdated)
+				ddbc.logger.Debug().Str("op", "peek").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("")
 				if selectedRecord == nil {
 					// This will be the next item to be processed
-					fmt.Printf("Selected: ID: %s, M: %s\n", item.Id, item.LastUpdated)
+					ddbc.logger.Debug().Str("op", "peek-selected").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("")
 					selectedRecord = item
 				}
 			} else {
 				// Visibility timeout has expired, and the Item never finished
 				// processing.
-				fmt.Printf("VisibilityTimeout Exceeded: ID:%s\n", item.Id)
+				ddbc.logger.Debug().Str("op", "peek-visibility-timeout").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("visibility timeout exceeded")
 				itemsForReprocessing = append(itemsForReprocessing, *item)
 			}
 		}
@@ -266,7 +267,7 @@ func (ddbc *DDBConnection) restoreRecords(records []QueueRecord.QRecord) error {
 		)
 		expr, err := expression.NewBuilder().WithCondition(cond).WithUpdate(upd).Build()
 		if err != nil {
-			log.Printf("failed to build expression for: %s\n", item.Id)
+			ddbc.logger.Err(err).Str("record-id", item.Id).Msg("failed to build ddb expression")
 		}
 		trans := &types.Update{
 			Key:                                 QueueRecord.IdToKeyExpr(item.Id),
@@ -283,7 +284,7 @@ func (ddbc *DDBConnection) restoreRecords(records []QueueRecord.QRecord) error {
 		TransactItems:      updateExpressions,
 		ClientRequestToken: aws.String(uuid.New().String()),
 	})
-	fmt.Println("Items updated..")
+	ddbc.logger.Debug().Msg("records visibility-timeout refreshed..")
 	if err != nil {
 		return err
 	}
