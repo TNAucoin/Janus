@@ -1,11 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"github.com/joho/godotenv"
+	ampq "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
 	"github.com/tnaucoin/Janus/config"
 	"github.com/tnaucoin/Janus/internal/dynamo"
 	"github.com/tnaucoin/Janus/models/QueueRecord"
+	"net/url"
 	"os"
 	"strconv"
 )
@@ -22,7 +25,13 @@ func main() {
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 	conf := config.New()
-	ddbclient, err := dynamo.New(conf.DB, logger)
+	connString := fmt.Sprintf("amqps://%s:%s@%s:%s", url.QueryEscape(""), url.QueryEscape(""), "", "5671")
+	conn, err := ampq.Dial(connString)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to connect to rabbitmq")
+	}
+	defer conn.Close()
+	ddbclient, err := dynamo.New(*conf, logger)
 	if err != nil {
 		logger.Fatal().Err(err)
 	}
@@ -32,12 +41,14 @@ func main() {
 		if err != nil {
 			logger.Fatal().Err(err).Msg("failed to create the ddb table")
 		}
-		r1 := CreateRecord(ddbclient, logger)
-		Enqueue(r1.Id, 1, ddbclient, logger)
-		r2 := CreateRecord(ddbclient, logger)
-		Enqueue(r2.Id, 1, ddbclient, logger)
+		//r1 := CreateRecord(ddbclient, logger)
+		//Enqueue(r1.Id, 1, ddbclient, logger)
+		//r2 := CreateRecord(ddbclient, logger)
+		//Enqueue(r2.Id, 1, ddbclient, logger)
 		p1, _ := ddbclient.Peek(1)
-		logger.Debug().Str("op", "peek-result").Str("record-id", p1.Id).Msg("")
+		if p1 != nil {
+			logger.Debug().Str("op", "peek-result").Str("record-id", p1.Id).Msg("")
+		}
 		//Dequeue(p1.Id, ddbclient)
 
 	}

@@ -8,7 +8,7 @@ import (
 type Conf struct {
 	App   ConfApp
 	DB    ConfDB
-	Cache ConfCache
+	Queue ConfQueue
 }
 
 type ConfApp struct {
@@ -23,10 +23,8 @@ type ConfDB struct {
 	IndexName string `env:"DB_TABLE_INDEX_NAME,required"`
 }
 
-type ConfCache struct {
-	Host     string `env:"CACHE_HOST,required"`
-	Port     int    `env:"CACHE_PORT,required"`
-	Password string `env:"CACHE_PASSWORD,required"`
+type ConfQueue struct {
+	MaxRetries int `env:"QUEUE_MAX_RETRIES,default=3"`
 }
 
 func New() *Conf {

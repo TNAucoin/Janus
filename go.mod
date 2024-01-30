@@ -32,6 +32,7 @@ require (
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/rabbitmq/amqp091-go v1.9.0 // indirect
 	github.com/redis/go-redis/v9 v9.4.0 // indirect
 	github.com/rs/zerolog v1.31.0 // indirect
 	golang.org/x/sys v0.16.0 // indirect

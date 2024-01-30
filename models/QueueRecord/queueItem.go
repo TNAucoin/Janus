@@ -14,6 +14,7 @@ const (
 	Ready
 	Processing
 	Done
+	Dlq
 )
 
 var QStatusToString = map[QStatus]string{
@@ -21,6 +22,7 @@ var QStatusToString = map[QStatus]string{
 	Ready:      "READY",
 	Processing: "PROCESSING",
 	Done:       "DONE",
+	Dlq:        "DLQ",
 }
 
 type QRecord struct {
