@@ -3,6 +3,7 @@ package QueueRecord
 import (
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/google/uuid"
 	"github.com/tnaucoin/Janus/utils"
 )
 
@@ -12,12 +13,14 @@ const (
 	Pending QStatus = iota
 	Ready
 	Processing
+	Done
 )
 
 var QStatusToString = map[QStatus]string{
 	Pending:    "PENDING",
 	Ready:      "READY",
 	Processing: "PROCESSING",
+	Done:       "DONE",
 }
 
 type QRecord struct {
@@ -26,13 +29,15 @@ type QRecord struct {
 	SystemInfo  *QSystemInfo `dynamodbav:"system_info"`
 }
 type QSystemInfo struct {
-	Created       string `dynamodbav:"created_timestamp"`
-	Id            string `dynamodbav:"id"`
-	LastUpdated   string `dynamodbav:"last_updated_timestamp"`
-	QueueSelected bool   `dynamodbav:"queue_selected"`
-	Queued        int64  `dynamodbav:"queued"`
-	Status        string `dynamodbav:"status"`
-	Version       int64  `dynamodbav:"version"`
+	Created           string `dynamodbav:"created_timestamp"`
+	Id                string `dynamodbav:"id"`
+	LastUpdated       string `dynamodbav:"last_updated_timestamp"`
+	QueueSelected     bool   `dynamodbav:"queue_selected"`
+	Queued            int64  `dynamodbav:"queued"`
+	Reprocessed       int    `dynamodbav:"reprocessed_count"`
+	Status            string `dynamodbav:"status"`
+	Version           int64  `dynamodbav:"version"`
+	VisibilityTimeout string `dynamodbav:"visibility_timeout_timestamp"`
 }
 
 // IdToKeyExpr takes an ID string and returns a map of key expression for DynamoDB.
@@ -48,8 +53,9 @@ func IdToKeyExpr(id string) map[string]types.AttributeValue {
 // It also creates a new QSystemInfo object using the provided ID and current time,
 // and assigns it to the SystemInfo field of the QRecord.
 // The returned QRecord object contains the ID, LastUpdated, and SystemInfo fields populated.
-func NewQRecord(id string) *QRecord {
+func NewQRecord() *QRecord {
 	currentTime := utils.GetCurrentTimeAWSFormatted()
+	id := uuid.New().String()
 	info := newSystemInfo(id, currentTime)
 	return &QRecord{
 		Id:          id,
@@ -65,13 +71,15 @@ func NewQRecord(id string) *QRecord {
 // and the Version field is set to 1.
 func newSystemInfo(id, currentTime string) *QSystemInfo {
 	return &QSystemInfo{
-		Created:       currentTime,
-		Id:            id,
-		LastUpdated:   currentTime,
-		QueueSelected: false,
-		Queued:        0,
-		Status:        "PENDING",
-		Version:       1,
+		Created:           currentTime,
+		Id:                id,
+		LastUpdated:       currentTime,
+		QueueSelected:     false,
+		Queued:            0,
+		Status:            "PENDING",
+		Reprocessed:       0,
+		Version:           1,
+		VisibilityTimeout: currentTime,
 	}
 }
 

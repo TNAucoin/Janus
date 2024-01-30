@@ -8,9 +8,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/google/uuid"
 	"github.com/tnaucoin/Janus/config"
 	"github.com/tnaucoin/Janus/models/QueueRecord"
 	"github.com/tnaucoin/Janus/utils"
+	"log"
+	"time"
 )
 
 type DDBConnection struct {
@@ -61,16 +64,15 @@ func (ddbc *DDBConnection) AddRecord(record *QueueRecord.QRecord) error {
 	return nil
 }
 
-func (ddbc *DDBConnection) EnqueueRecord(id string) error {
+func (ddbc *DDBConnection) EnqueueRecord(id string, priority int) error {
 	record, err := ddbc.getRecord(id)
 	timestamp := utils.GetCurrentTimeAWSFormatted()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("old version: %d \n", record.SystemInfo.Version)
 	upd := expression.
-		Set(expression.Name("queued"), expression.Value(aws.Int64(1))).
-		Set(expression.Name("system_info.queued"), expression.Value(aws.Int64(1))).
+		Set(expression.Name("queued"), expression.Value(aws.Int(priority))).
+		Set(expression.Name("system_info.queued"), expression.Value(aws.Int(priority))).
 		Set(expression.Name("system_info.queue_added_timestamp"), expression.Value(timestamp)).
 		Set(expression.Name("system_info.queue_selected"), expression.Value(false)).
 		Set(expression.Name("system_info.status"), expression.Value(aws.String(QueueRecord.QStatusToString[QueueRecord.Ready]))).
@@ -100,7 +102,46 @@ func (ddbc *DDBConnection) EnqueueRecord(id string) error {
 	return nil
 }
 
-func (ddbc *DDBConnection) Peek(priority int64) (*[]QueueRecord.QRecord, error) {
+func (ddbc *DDBConnection) DequeueRecord(id string) error {
+	record, err := ddbc.getRecord(id)
+	if err != nil {
+		return err
+	}
+	timestamp := utils.GetCurrentTimeAWSFormatted()
+	upd := expression.
+		Set(expression.Name("system_info.queue_selected"), expression.Value(false)).
+		Set(expression.Name("last_updated_timestamp"), expression.Value(timestamp)).
+		Set(expression.Name("system_info.last_updated_timestamp"), expression.Value(timestamp)).
+		Add(expression.Name("system_info.version"), expression.Value(aws.Int64(1))).
+		Set(expression.Name("system_info.status"), expression.Value(aws.String(QueueRecord.QStatusToString[QueueRecord.Done]))).
+		Set(expression.Name("system_info.queue_remove_timestamp"), expression.Value(timestamp)).
+		Set(expression.Name("system_info.queued"), expression.Value(-1)).
+		Remove(expression.Name("queued"))
+
+	cond := expression.Equal(
+		expression.Name("system_info.version"),
+		expression.Value(aws.Int64(record.SystemInfo.Version)),
+	)
+	expr, err := expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build()
+	if err != nil {
+		return err
+	}
+	_, err = ddbc.Client.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+		Key:                       QueueRecord.IdToKeyExpr(id),
+		TableName:                 aws.String(ddbc.TableName),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ReturnValues:              types.ReturnValueAllNew,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 	cond := expression.Equal(
 		expression.Name("queued"),
 		expression.Value(aws.Int64(priority)),
@@ -114,15 +155,139 @@ func (ddbc *DDBConnection) Peek(priority int64) (*[]QueueRecord.QRecord, error) 
 		KeyConditionExpression:    expr.Condition(),
 		Limit:                     aws.Int32(250),
 		ScanIndexForward:          aws.Bool(true),
+		ProjectionExpression:      aws.String("id, last_updated_timestamp, system_info"),
 	})
 	if err != nil {
 		return nil, err
 	}
-	var records []QueueRecord.QRecord
-	if err := attributevalue.UnmarshalListOfMaps(resp.Items, &records); err != nil {
+	var queueRecords []QueueRecord.QRecord         // all Items currently in the Queue
+	var selectedRecord *QueueRecord.QRecord        // the next item to process
+	var itemsForReprocessing []QueueRecord.QRecord // Items marked for reprocessing
+
+	if err := attributevalue.UnmarshalListOfMaps(resp.Items, &queueRecords); err != nil {
 		return nil, err
 	}
-	return &records, nil
+
+	for i := range queueRecords {
+		item := &queueRecords[i]
+		// Change the AWS Timestamp back into a go time object
+		visibilityTime, err := utils.ParseAWSFormattedTime(item.SystemInfo.VisibilityTimeout)
+		if err != nil {
+			return nil, err
+		}
+		// If the current time is after the visibility time, or if the current time is equal to the visibility time
+		// and the selectedRecord is nil, then set the selectedRecord to the current item.
+		if time.Now().After(visibilityTime) || time.Now().Equal(visibilityTime) {
+			// This item is visible, check to see if it needs to be processed
+			// If False, this value hasn't been processed yet.
+			if !item.SystemInfo.QueueSelected {
+				fmt.Printf("PEEK: ID: %s, M: %s\n", item.Id, item.LastUpdated)
+				if selectedRecord == nil {
+					// This will be the next item to be processed
+					fmt.Printf("Selected: ID: %s, M: %s\n", item.Id, item.LastUpdated)
+					selectedRecord = item
+				}
+			} else {
+				// Visibility timeout has expired, and the Item never finished
+				// processing.
+				fmt.Printf("VisibilityTimeout Exceeded: ID:%s\n", item.Id)
+				itemsForReprocessing = append(itemsForReprocessing, *item)
+			}
+		}
+	}
+
+	// update the record in ddb for processing
+	if err := ddbc.markRecordForProcessing(*selectedRecord); err != nil {
+		return nil, err
+	}
+	// If we have records that are processing and exceeded their visibility timeout
+	// restore the records back into the queue
+	if len(itemsForReprocessing) > 0 {
+		if err := ddbc.restoreRecords(itemsForReprocessing); err != nil {
+			return nil, err
+		}
+	}
+
+	return selectedRecord, nil
+}
+
+func (ddbc *DDBConnection) markRecordForProcessing(record QueueRecord.QRecord) error {
+	timestamp := utils.GetCurrentTimeAWSFormatted()
+	// construct the visibility timeout
+	visibilityTimeout := utils.ConvertTimeAWSFormatted(time.Now().Add(30 * time.Second))
+
+	upd := expression.
+		Set(expression.Name("system_info.queue_selected"), expression.Value(true)).
+		Set(expression.Name("last_updated_timestamp"), expression.Value(timestamp)).
+		Set(expression.Name("system_info.last_updated_timestamp"), expression.Value(timestamp)).
+		Add(expression.Name("system_info.version"), expression.Value(aws.Int64(1))).
+		Set(expression.Name("system_info.status"), expression.Value(aws.String(QueueRecord.QStatusToString[QueueRecord.Processing]))).
+		Set(expression.Name("system_info.queue_peek_timestamp"), expression.Value(timestamp)).
+		Set(expression.Name("system_info.visibility_timeout_timestamp"), expression.Value(visibilityTimeout))
+	cond := expression.Equal(
+		expression.Name("system_info.version"),
+		expression.Value(aws.Int64(record.SystemInfo.Version)),
+	)
+	expr, err := expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build()
+	if err != nil {
+		return err
+	}
+	_, err = ddbc.Client.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+		Key:                       QueueRecord.IdToKeyExpr(record.Id),
+		TableName:                 aws.String(ddbc.TableName),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ReturnValues:              types.ReturnValueAllNew,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ddbc *DDBConnection) restoreRecords(records []QueueRecord.QRecord) error {
+	var updateExpressions []types.TransactWriteItem
+	for i := range records {
+		item := records[i]
+		timestamp := utils.GetCurrentTimeAWSFormatted()
+		upd := expression.
+			Set(expression.Name("system_info.queue_selected"), expression.Value(false)).
+			Set(expression.Name("system_info.visibility_timeout_timestamp"), expression.Value(timestamp)).
+			Set(expression.Name("last_updated_timestamp"), expression.Value(timestamp)).
+			Set(expression.Name("system_info.last_updated_timestamp"), expression.Value(timestamp)).
+			Add(expression.Name("system_info.version"), expression.Value(aws.Int64(1))).
+			Add(expression.Name("system_info.reprocessed_count"), expression.Value(1)).
+			Set(expression.Name("system_info.status"), expression.Value(aws.String(QueueRecord.QStatusToString[QueueRecord.Ready])))
+		cond := expression.Equal(
+			expression.Name("system_info.version"),
+			expression.Value(aws.Int64(item.SystemInfo.Version)),
+		)
+		expr, err := expression.NewBuilder().WithCondition(cond).WithUpdate(upd).Build()
+		if err != nil {
+			log.Printf("failed to build expression for: %s\n", item.Id)
+		}
+		trans := &types.Update{
+			Key:                                 QueueRecord.IdToKeyExpr(item.Id),
+			TableName:                           aws.String(ddbc.TableName),
+			UpdateExpression:                    expr.Update(),
+			ConditionExpression:                 expr.Condition(),
+			ExpressionAttributeNames:            expr.Names(),
+			ExpressionAttributeValues:           expr.Values(),
+			ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+		}
+		updateExpressions = append(updateExpressions, types.TransactWriteItem{Update: trans})
+	}
+	_, err := ddbc.Client.TransactWriteItems(context.TODO(), &dynamodb.TransactWriteItemsInput{
+		TransactItems:      updateExpressions,
+		ClientRequestToken: aws.String(uuid.New().String()),
+	})
+	fmt.Println("Items updated..")
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (ddbc *DDBConnection) getRecord(id string) (*QueueRecord.QRecord, error) {

@@ -5,6 +5,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/tnaucoin/Janus/config"
 	"github.com/tnaucoin/Janus/internal/dynamo"
+	"github.com/tnaucoin/Janus/models/QueueRecord"
 	"log"
 )
 
@@ -27,21 +28,37 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed to create the ddb table: %v", err)
 		}
-		//newRecord := QueueRecord.NewQRecord("789")
-		//err = ddbclient.AddRecord(newRecord)
-		//if err != nil {
-		//	log.Fatalf("error: %v", err)
-		//}
-		//err = ddbclient.EnqueueRecord("789")
-		//if err != nil {
-		//	log.Fatalf("enqueue error: %v", err)
-		//}
-		records, err := ddbclient.Peek(1)
-		if err != nil {
-			log.Fatalf("peek error: %v", err)
-		}
-		for _, v := range *records {
-			fmt.Println(v)
-		}
+		r1 := CreateRecord(ddbclient)
+		Enqueue(r1.Id, 1, ddbclient)
+		r2 := CreateRecord(ddbclient)
+		Enqueue(r2.Id, 1, ddbclient)
+		p1, _ := ddbclient.Peek(1)
+		fmt.Printf("RETURN TO CLIENT: ID: %s\n", p1.Id)
+		//Dequeue(p1.Id, ddbclient)
+
 	}
+}
+
+func CreateRecord(ddb *dynamo.DDBConnection) QueueRecord.QRecord {
+	q := QueueRecord.NewQRecord()
+	if err := ddb.AddRecord(q); err != nil {
+		log.Fatalf("ddb error: %v", err)
+	}
+	fmt.Printf("Enqueued: %s\n", q.Id)
+	return *q
+}
+
+func Enqueue(id string, priority int, ddb *dynamo.DDBConnection) {
+	err := ddb.EnqueueRecord(id, priority)
+	if err != nil {
+		log.Fatalf("failed to enqueue record: %s. %v\n", id, err)
+	}
+}
+
+func Dequeue(id string, ddb *dynamo.DDBConnection) {
+	err := ddb.DequeueRecord(id)
+	if err != nil {
+		log.Fatalf("failed to dequeue: %s. %v\n", id, err)
+	}
+	fmt.Printf("Dequeued: %s\n", id)
 }

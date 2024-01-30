@@ -6,8 +6,9 @@ import (
 )
 
 type Conf struct {
-	App ConfApp
-	DB  ConfDB
+	App   ConfApp
+	DB    ConfDB
+	Cache ConfCache
 }
 
 type ConfApp struct {
@@ -20,6 +21,12 @@ type ConfDB struct {
 	TableName string `env:"DB_TABLE_NAME,required"`
 	Region    string `env:"DB_REGION,required"`
 	IndexName string `env:"DB_TABLE_INDEX_NAME,required"`
+}
+
+type ConfCache struct {
+	Host     string `env:"CACHE_HOST,required"`
+	Port     int    `env:"CACHE_PORT,required"`
+	Password string `env:"CACHE_PASSWORD,required"`
 }
 
 func New() *Conf {

@@ -52,8 +52,7 @@ var LocalTableInput = func(tableName string, indexName string) *dynamodb.CreateT
 					},
 				},
 				Projection: &types.Projection{
-					NonKeyAttributes: nil,
-					ProjectionType:   types.ProjectionTypeAll,
+					ProjectionType: types.ProjectionTypeAll,
 				},
 				ProvisionedThroughput: &types.ProvisionedThroughput{
 					ReadCapacityUnits:  aws.Int64(10),

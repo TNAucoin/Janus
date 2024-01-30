@@ -18,11 +18,22 @@ services:
         - "./docker/ddb-local:/home/dynamodblocal/data"
     working_dir: /home/dynamodblocal
     user: root
+  cache:
+    image: redis:6.2-alpine
+    restart: always
+    ports:
+      - '6379:6379'
+    command: redis-server --save 20 1 --loglevel warning --requirepass eYVX7EwVmmxKPCDmwMtyKVge8oLd2t81
+    volumes:
+      - cache:/data
   janus:
     build: .
     env_file: local.env
     ports:
       - "8001:8001"
     depends_on:
-      ddb-local:
-        condition: service_healthy
+      - cache
+      - ddb-local
+volumes:
+  cache:
+    driver: local
