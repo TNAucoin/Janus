@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"github.com/joho/godotenv"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
 	"github.com/tnaucoin/Janus/config"
 	"github.com/tnaucoin/Janus/internal/dynamo"
@@ -23,7 +25,7 @@ func main() {
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 	conf := config.New()
-	conn, err := mq.ConnectRabbitMQ("janus", "password", "mq:5672", "janus")
+	conn, err := mq.ConnectRabbitMQ(conf.MQ.Protocol, conf.MQ.User, conf.MQ.Password, conf.MQ.Host, conf.MQ.VHost, conf.MQ.Port)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to connect to rabbitmq")
 	}
@@ -32,6 +34,7 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to create the RabbitMQ client")
 	}
+	logger.Info().Msg("connected to RabbitMQ")
 	defer rabbitClient.Close()
 	ddbclient, err := dynamo.New(*conf, logger)
 	if err != nil {
@@ -43,15 +46,36 @@ func main() {
 		if err != nil {
 			logger.Fatal().Err(err).Msg("failed to create the ddb table")
 		}
+		if err := rabbitClient.CreateQueue("job_created", true, false); err != nil {
+			logger.Fatal().Err(err).Msg("")
+		}
+		if err := rabbitClient.CreateQueue("job_test", false, true); err != nil {
+			logger.Fatal().Err(err).Msg("")
+		}
+		if err := rabbitClient.CreateBinding("job_created", "job.created.*", "job_events"); err != nil {
+			logger.Fatal().Err(err).Msg("")
+		}
+		if err := rabbitClient.CreateBinding("job_test", "job.*", "job_events"); err != nil {
+			logger.Fatal().Err(err).Msg("")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := rabbitClient.Send(ctx, "job_events", "job.created.test", amqp.Publishing{
+			ContentType:  "text/plain",
+			DeliveryMode: amqp.Transient,
+			Body:         []byte("Some job message"),
+		}); err != nil {
+			logger.Fatal().Err(err).Msg("")
+		}
 		time.Sleep(30 * time.Second)
 		//r1 := CreateRecord(ddbclient, logger)
 		//Enqueue(r1.Id, 1, ddbclient, logger)
 		//r2 := CreateRecord(ddbclient, logger)
 		//Enqueue(r2.Id, 1, ddbclient, logger)
-		p1, _ := ddbclient.Peek(1)
-		if p1 != nil {
-			logger.Debug().Str("op", "peek-result").Str("record-id", p1.Id).Msg("")
-		}
+		//p1, _ := ddbclient.Peek(1)
+		//if p1 != nil {
+		//	logger.Debug().Str("op", "peek-result").Str("record-id", p1.Id).Msg("")
+		//}
 		//Dequeue(p1.Id, ddbclient)
 
 	}

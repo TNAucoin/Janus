@@ -9,6 +9,7 @@ type Conf struct {
 	App   ConfApp
 	DB    ConfDB
 	Queue ConfQueue
+	MQ    ConfMQ
 }
 
 type ConfApp struct {
@@ -25,6 +26,15 @@ type ConfDB struct {
 
 type ConfQueue struct {
 	MaxRetries int `env:"QUEUE_MAX_RETRIES,default=3"`
+}
+
+type ConfMQ struct {
+	User     string `env:"MQ_USER,required"`
+	Password string `env:"MQ_PASS,required"`
+	Host     string `env:"MQ_HOST,required"`
+	Port     int    `env:"MQ_PORT,required"`
+	Protocol string `env:"MQ_PROTOCOL,required"`
+	VHost    string `env:"MQ_VHOST,required"`
 }
 
 func New() *Conf {
