@@ -19,6 +19,7 @@ services:
     working_dir: /home/dynamodblocal
     user: root
   mq:
+    hostname: 'mq'
     image: rabbitmq:3-management
     ports:
       - "5672:5672"
@@ -26,12 +27,23 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: admin
+    volumes:
+      - "./docker/rabbitmq/data/:/var/lib/rabbitmq/"
+      - "./docker/rabbitmq/data/:/var/log/rabbitmq"
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "check_running" ]
+      interval: 30s
+      timeout: 30s
+      retries: 5
   janus:
     build: .
     env_file: local.env
     ports:
       - "8001:8001"
     depends_on:
-      - mq
-      - ddb-local
+      mq:
+        condition: service_healthy
+      ddb-local:
+        condition: service_healthy
+
 

@@ -1,16 +1,15 @@
 package main
 
 import (
-	"fmt"
 	"github.com/joho/godotenv"
-	ampq "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
 	"github.com/tnaucoin/Janus/config"
 	"github.com/tnaucoin/Janus/internal/dynamo"
+	"github.com/tnaucoin/Janus/internal/mq"
 	"github.com/tnaucoin/Janus/models/QueueRecord"
-	"net/url"
 	"os"
 	"strconv"
+	"time"
 )
 
 var (
@@ -20,17 +19,20 @@ var (
 func main() {
 	// Load the local environment variables
 	_ = godotenv.Load(localEnvFile)
-
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 	conf := config.New()
-	connString := fmt.Sprintf("amqps://%s:%s@%s:%s", url.QueryEscape(""), url.QueryEscape(""), "", "5671")
-	conn, err := ampq.Dial(connString)
+	conn, err := mq.ConnectRabbitMQ("janus", "password", "mq:5672", "janus")
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to connect to rabbitmq")
 	}
 	defer conn.Close()
+	rabbitClient, err := mq.NewRabbitMQClient(conn)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to create the RabbitMQ client")
+	}
+	defer rabbitClient.Close()
 	ddbclient, err := dynamo.New(*conf, logger)
 	if err != nil {
 		logger.Fatal().Err(err)
@@ -41,6 +43,7 @@ func main() {
 		if err != nil {
 			logger.Fatal().Err(err).Msg("failed to create the ddb table")
 		}
+		time.Sleep(30 * time.Second)
 		//r1 := CreateRecord(ddbclient, logger)
 		//Enqueue(r1.Id, 1, ddbclient, logger)
 		//r2 := CreateRecord(ddbclient, logger)
