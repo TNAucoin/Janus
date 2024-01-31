@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
@@ -60,10 +61,11 @@ func main() {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := rabbitClient.Send(ctx, "job_events", "job.created.test", amqp.Publishing{
+		if err := rabbitClient.Send(ctx, "job_events", "job.created.someValue", amqp.Publishing{
 			ContentType:  "text/plain",
 			DeliveryMode: amqp.Transient,
 			Body:         []byte("Some job message"),
+			MessageId:    uuid.New().String(),
 		}); err != nil {
 			logger.Fatal().Err(err).Msg("")
 		}
