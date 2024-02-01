@@ -16,12 +16,12 @@ import (
 )
 
 type DDBConnection struct {
-	Client     *dynamodb.Client
-	Region     string
-	TableName  string
-	IndexName  string
+	dbClient   *dynamodb.Client
+	region     string
+	tableName  string
+	indexName  string
 	logger     zerolog.Logger
-	MaxRetries int
+	maxRetries int
 }
 
 // New is a function that creates a new instance of DDBConnection, which represents a connection to Amazon DynamoDB.
@@ -43,12 +43,12 @@ func New(conf config.Conf, logger zerolog.Logger) (*DDBConnection, error) {
 	}
 	db = dynamodb.NewFromConfig(cfg)
 	return &DDBConnection{
-		Client:     db,
-		Region:     conf.DB.Region,
-		TableName:  conf.DB.TableName,
-		IndexName:  conf.DB.IndexName,
+		dbClient:   db,
+		region:     conf.DB.Region,
+		tableName:  conf.DB.TableName,
+		indexName:  conf.DB.IndexName,
 		logger:     logger,
-		MaxRetries: conf.Queue.MaxRetries,
+		maxRetries: conf.Queue.MaxRetries,
 	}, nil
 }
 
@@ -57,8 +57,8 @@ func (ddbc *DDBConnection) AddRecord(record *QueueRecord.QRecord) error {
 	if err != nil {
 		return err
 	}
-	_, err = ddbc.Client.PutItem(context.TODO(), &dynamodb.PutItemInput{
-		TableName: aws.String(ddbc.TableName),
+	_, err = ddbc.dbClient.PutItem(context.TODO(), &dynamodb.PutItemInput{
+		TableName: aws.String(ddbc.tableName),
 		Item:      item,
 	})
 	if err != nil {
@@ -90,9 +90,9 @@ func (ddbc *DDBConnection) EnqueueRecord(id string, priority int) error {
 	if err != nil {
 		return err
 	}
-	_, err = ddbc.Client.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+	_, err = ddbc.dbClient.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
 		Key:                       QueueRecord.IdToKeyExpr(id),
-		TableName:                 aws.String(ddbc.TableName),
+		TableName:                 aws.String(ddbc.tableName),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		UpdateExpression:          expr.Update(),
@@ -129,9 +129,9 @@ func (ddbc *DDBConnection) DequeueRecord(id string) error {
 	if err != nil {
 		return err
 	}
-	_, err = ddbc.Client.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+	_, err = ddbc.dbClient.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
 		Key:                       QueueRecord.IdToKeyExpr(id),
-		TableName:                 aws.String(ddbc.TableName),
+		TableName:                 aws.String(ddbc.tableName),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		UpdateExpression:          expr.Update(),
@@ -150,11 +150,11 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 		expression.Value(aws.Int64(priority)),
 	)
 	expr, err := expression.NewBuilder().WithCondition(cond).Build()
-	resp, err := ddbc.Client.Query(context.TODO(), &dynamodb.QueryInput{
-		TableName:                 aws.String(ddbc.TableName),
+	resp, err := ddbc.dbClient.Query(context.TODO(), &dynamodb.QueryInput{
+		TableName:                 aws.String(ddbc.tableName),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-		IndexName:                 aws.String(ddbc.IndexName),
+		IndexName:                 aws.String(ddbc.indexName),
 		KeyConditionExpression:    expr.Condition(),
 		Limit:                     aws.Int32(250),
 		ScanIndexForward:          aws.Bool(true),
@@ -182,7 +182,7 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 		}
 		// Regardless if the item is visible or not, if it has exceeded the maximum number of retries
 		// send it to the DLQ
-		if item.SystemInfo.Reprocessed > ddbc.MaxRetries {
+		if item.SystemInfo.Reprocessed > ddbc.maxRetries {
 			// This item has exceeded the maximum number of retries, send it to the DLQ
 			ddbc.logger.Debug().Str("op", "peek-dlq").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("")
 			itemsForDLQ = append(itemsForDLQ, *item)
@@ -256,9 +256,9 @@ func (ddbc *DDBConnection) markRecordForProcessing(record QueueRecord.QRecord) e
 		ddbc.logger.Err(err).Msg("failed to build processing expr")
 		return err
 	}
-	_, err = ddbc.Client.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+	_, err = ddbc.dbClient.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
 		Key:                       QueueRecord.IdToKeyExpr(record.Id),
-		TableName:                 aws.String(ddbc.TableName),
+		TableName:                 aws.String(ddbc.tableName),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		UpdateExpression:          expr.Update(),
@@ -298,7 +298,7 @@ func (ddbc *DDBConnection) restoreRecords(records []QueueRecord.QRecord) error {
 		}
 		trans := &types.Update{
 			Key:                                 QueueRecord.IdToKeyExpr(item.Id),
-			TableName:                           aws.String(ddbc.TableName),
+			TableName:                           aws.String(ddbc.tableName),
 			UpdateExpression:                    expr.Update(),
 			ConditionExpression:                 expr.Condition(),
 			ExpressionAttributeNames:            expr.Names(),
@@ -307,7 +307,7 @@ func (ddbc *DDBConnection) restoreRecords(records []QueueRecord.QRecord) error {
 		}
 		updateExpressions = append(updateExpressions, types.TransactWriteItem{Update: trans})
 	}
-	_, err := ddbc.Client.TransactWriteItems(context.TODO(), &dynamodb.TransactWriteItemsInput{
+	_, err := ddbc.dbClient.TransactWriteItems(context.TODO(), &dynamodb.TransactWriteItemsInput{
 		TransactItems:      updateExpressions,
 		ClientRequestToken: aws.String(uuid.New().String()),
 	})
@@ -342,7 +342,7 @@ func (ddbc *DDBConnection) dlqRecords(records []QueueRecord.QRecord) error {
 		}
 		trans := &types.Update{
 			Key:                                 QueueRecord.IdToKeyExpr(item.Id),
-			TableName:                           aws.String(ddbc.TableName),
+			TableName:                           aws.String(ddbc.tableName),
 			UpdateExpression:                    expr.Update(),
 			ConditionExpression:                 expr.Condition(),
 			ExpressionAttributeNames:            expr.Names(),
@@ -351,7 +351,7 @@ func (ddbc *DDBConnection) dlqRecords(records []QueueRecord.QRecord) error {
 		}
 		updateExpressions = append(updateExpressions, types.TransactWriteItem{Update: trans})
 	}
-	_, err := ddbc.Client.TransactWriteItems(context.TODO(), &dynamodb.TransactWriteItemsInput{
+	_, err := ddbc.dbClient.TransactWriteItems(context.TODO(), &dynamodb.TransactWriteItemsInput{
 		TransactItems:      updateExpressions,
 		ClientRequestToken: aws.String(uuid.New().String()),
 	})
@@ -363,9 +363,9 @@ func (ddbc *DDBConnection) dlqRecords(records []QueueRecord.QRecord) error {
 }
 
 func (ddbc *DDBConnection) getRecord(id string) (*QueueRecord.QRecord, error) {
-	resp, err := ddbc.Client.GetItem(context.TODO(), &dynamodb.GetItemInput{
+	resp, err := ddbc.dbClient.GetItem(context.TODO(), &dynamodb.GetItemInput{
 		Key:            QueueRecord.IdToKeyExpr(id),
-		TableName:      aws.String(ddbc.TableName),
+		TableName:      aws.String(ddbc.tableName),
 		ConsistentRead: aws.Bool(true),
 	})
 	if err != nil {

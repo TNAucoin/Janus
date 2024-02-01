@@ -30,13 +30,23 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to connect to rabbitmq")
 	}
-	defer conn.Close()
+	defer func(conn *amqp.Connection) {
+		err := conn.Close()
+		if err != nil {
+			logger.Err(err).Msg("failed to close the rabbitMQ connection")
+		}
+	}(conn)
 	rabbitClient, err := mq.NewRabbitMQClient(conn, logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to create the RabbitMQ client")
 	}
 	logger.Info().Msg("connected to RabbitMQ")
-	defer rabbitClient.Close()
+	defer func(rabbitClient mq.RabbitClient) {
+		err := rabbitClient.Close()
+		if err != nil {
+			logger.Err(err).Msg("failed to close client connections..")
+		}
+	}(rabbitClient)
 	ddbclient, err := dynamo.New(*conf, logger)
 	if err != nil {
 		logger.Fatal().Err(err)
@@ -47,21 +57,24 @@ func main() {
 		if err != nil {
 			logger.Fatal().Err(err).Msg("failed to create the ddb table")
 		}
-		if err := rabbitClient.CreateQueue("job_created", true, false); err != nil {
+		if err := rabbitClient.CreateChannel("job", false); err != nil {
+			logger.Err(err).Msg("failed to create channel.")
+		}
+		if err := rabbitClient.CreateQueue("job", "job_created", true, false); err != nil {
 			logger.Fatal().Err(err).Msg("")
 		}
-		if err := rabbitClient.CreateQueue("job_test", false, true); err != nil {
+		if err := rabbitClient.CreateQueue("job", "job_test", false, true); err != nil {
 			logger.Fatal().Err(err).Msg("")
 		}
-		if err := rabbitClient.CreateBinding("job_created", "job.created.*", "job_events"); err != nil {
+		if err := rabbitClient.CreateBinding("job", "job_created", "job.created.*", "job_events"); err != nil {
 			logger.Fatal().Err(err).Msg("")
 		}
-		if err := rabbitClient.CreateBinding("job_test", "job.*", "job_events"); err != nil {
+		if err := rabbitClient.CreateBinding("job", "job_test", "job.*", "job_events"); err != nil {
 			logger.Fatal().Err(err).Msg("")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		var numJobs = 5
+		var numJobs = 20
 		for i := 0; i < numJobs; i++ {
 			record := CreateRecord(ddbclient, logger)
 			Enqueue(record.Id, 1, ddbclient, logger)
@@ -71,7 +84,7 @@ func main() {
 			if err != nil {
 				logger.Fatal().Msg("Failed to peek, for events")
 			}
-			if err := rabbitClient.Send(ctx, "job_events", fmt.Sprintf("job.created.%d", i), amqp.Publishing{
+			if err := rabbitClient.Send(ctx, "job", "job_events", fmt.Sprintf("job.created.%d", i), amqp.Publishing{
 				ContentType:  "text/plain",
 				DeliveryMode: amqp.Transient,
 				Body:         []byte("Some job message"),

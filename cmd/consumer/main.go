@@ -15,6 +15,7 @@ import (
 var (
 	localEnvFile = "local.env"
 	workersCount = 10
+	chName       = "job"
 )
 
 func main() {
@@ -35,7 +36,10 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to create client")
 	}
-	messageBus, err := rmqc.Consume("job_created", "worker-service", false)
+	if err := rmqc.CreateChannel(chName, true); err != nil {
+		logger.Fatal().Msg("failed to create channel")
+	}
+	messageBus, err := rmqc.Consume(chName, "job_created", "worker-service", false)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to consume messages")
 	}
@@ -62,7 +66,7 @@ func main() {
 				workers <- struct{}{} //block if no free workers
 				messagesInProgress.Add(1)
 				go func(msg amqp.Delivery) {
-					recordID := doWork(msg, logger, ddbclient)
+					recordID := doWork(msg, logger)
 					if recordID != "" {
 						if err := ddbclient.DequeueRecord(recordID); err != nil {
 							logger.Err(err).Msgf("failed to dequeue record %s", recordID)
@@ -84,12 +88,7 @@ func main() {
 	messagesInProgress.Wait() // block until all messages have been processed
 }
 
-func doWork(message amqp.Delivery, logger zerolog.Logger, ddbc *dynamo.DDBConnection) string {
-	//if !message.Redelivered {
-	//	message.Nack(false, true)
-	//	logger.Debug().Msgf("requeue message: %s", message.MessageId)
-	//	return
-	//}
+func doWork(message amqp.Delivery, logger zerolog.Logger) string {
 
 	if err := message.Ack(false); err != nil {
 		logger.Err(err).Msgf("failed to ack message: %s", message.MessageId)

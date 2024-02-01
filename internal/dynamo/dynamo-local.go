@@ -15,7 +15,7 @@ import (
 
 // LocalTableInput is a variable that represents the input parameters for creating a local DynamoDB table.
 // It is a function that takes a tableName string parameter and returns a pointer to dynamodb.CreateTableInput.
-// Make sure to have a valid DDBConnection object with a valid Client, Region, and TableName before using LocalTableInput.
+// Make sure to have a valid DDBConnection object with a valid dbClient, region, and tableName before using LocalTableInput.
 var LocalTableInput = func(tableName string, indexName string) *dynamodb.CreateTableInput {
 	return &dynamodb.CreateTableInput{
 		AttributeDefinitions: []types.AttributeDefinition{
@@ -75,7 +75,7 @@ func CreateLocalTable(ddbc *DDBConnection) error {
 		return err
 	}
 	if exists {
-		log.Printf("table: %s already exists, skipping creation", ddbc.TableName)
+		log.Printf("table: %s already exists, skipping creation", ddbc.tableName)
 	} else {
 		log.Printf("table not found creating a new local table...")
 		err := createDynamoDBTable(ddbc)
@@ -89,20 +89,20 @@ func CreateLocalTable(ddbc *DDBConnection) error {
 // createDynamoDBTable creates a DynamoDB table using the provided DDBConnection.
 // It takes the DDBConnection as a parameter and returns an error if the table creation fails.
 func createDynamoDBTable(ddbc *DDBConnection) error {
-	_, err := ddbc.Client.CreateTable(context.TODO(), LocalTableInput(ddbc.TableName, ddbc.IndexName))
+	_, err := ddbc.dbClient.CreateTable(context.TODO(), LocalTableInput(ddbc.tableName, ddbc.indexName))
 	if err != nil {
 		log.Printf("%v", err)
 		return errors.New("failed to create table")
 	}
-	waiter := dynamodb.NewTableExistsWaiter(ddbc.Client)
+	waiter := dynamodb.NewTableExistsWaiter(ddbc.dbClient)
 	err = waiter.Wait(context.TODO(), &dynamodb.DescribeTableInput{
-		TableName: aws.String(ddbc.TableName),
+		TableName: aws.String(ddbc.tableName),
 	}, 5*time.Minute)
 	if err != nil {
 		log.Printf("%v", err)
 		return errors.New("table creation timed out")
 	}
-	log.Printf("successfully created the table: %s", ddbc.TableName)
+	log.Printf("successfully created the table: %s", ddbc.tableName)
 	return nil
 }
 
@@ -160,8 +160,8 @@ func createLocalConfig(region, url string) (aws.Config, error) {
 // Finally, it returns the exists value and nil error if successful.
 func checkIfLocalTableExists(ddbc *DDBConnection) (bool, error) {
 	exists := true
-	_, err := ddbc.Client.DescribeTable(context.TODO(), &dynamodb.DescribeTableInput{
-		TableName: aws.String(ddbc.TableName),
+	_, err := ddbc.dbClient.DescribeTable(context.TODO(), &dynamodb.DescribeTableInput{
+		TableName: aws.String(ddbc.tableName),
 	})
 	if err != nil {
 		var notFound *types.ResourceNotFoundException
