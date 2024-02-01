@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"github.com/google/uuid"
+	"fmt"
 	"github.com/joho/godotenv"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
@@ -31,7 +31,7 @@ func main() {
 		logger.Fatal().Err(err).Msg("failed to connect to rabbitmq")
 	}
 	defer conn.Close()
-	rabbitClient, err := mq.NewRabbitMQClient(conn)
+	rabbitClient, err := mq.NewRabbitMQClient(conn, logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to create the RabbitMQ client")
 	}
@@ -61,13 +61,25 @@ func main() {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := rabbitClient.Send(ctx, "job_events", "job.created.someValue", amqp.Publishing{
-			ContentType:  "text/plain",
-			DeliveryMode: amqp.Transient,
-			Body:         []byte("Some job message"),
-			MessageId:    uuid.New().String(),
-		}); err != nil {
-			logger.Fatal().Err(err).Msg("")
+		var numJobs = 5
+		for i := 0; i < numJobs; i++ {
+			record := CreateRecord(ddbclient, logger)
+			Enqueue(record.Id, 1, ddbclient, logger)
+		}
+		for i := 0; i < numJobs; i++ {
+			r, err := ddbclient.Peek(1)
+			if err != nil {
+				logger.Fatal().Msg("Failed to peek, for events")
+			}
+			if err := rabbitClient.Send(ctx, "job_events", fmt.Sprintf("job.created.%d", i), amqp.Publishing{
+				ContentType:  "text/plain",
+				DeliveryMode: amqp.Transient,
+				Body:         []byte("Some job message"),
+				MessageId:    r.Id,
+				Priority:     1,
+			}); err != nil {
+				logger.Fatal().Err(err).Msg("")
+			}
 		}
 		time.Sleep(30 * time.Second)
 		//r1 := CreateRecord(ddbclient, logger)

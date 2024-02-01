@@ -169,6 +169,7 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 	var itemsForReprocessing []QueueRecord.QRecord // Items marked for reprocessing
 
 	if err := attributevalue.UnmarshalListOfMaps(resp.Items, &queueRecords); err != nil {
+		ddbc.logger.Err(err).Msg("failed to unmarshal collection")
 		return nil, err
 	}
 
@@ -193,16 +194,19 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 			// This item is visible, check to see if it needs to be processed
 			// If False, this value hasn't been processed yet.
 			if !item.SystemInfo.QueueSelected {
-				ddbc.logger.Debug().Str("op", "peek").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("")
+				//ddbc.logger.Debug().Str("op", "peek").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("")
 				if selectedRecord == nil {
 					// This will be the next item to be processed
 					ddbc.logger.Debug().Str("op", "peek-selected").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("")
 					selectedRecord = item
+					if err := ddbc.markRecordForProcessing(*selectedRecord); err != nil {
+						return nil, err
+					}
 				}
 			} else {
 				// Visibility timeout has expired, and the Item never finished
 				// processing.
-				ddbc.logger.Debug().Str("op", "peek-visibility-timeout").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("visibility timeout exceeded")
+				//ddbc.logger.Debug().Str("op", "peek-visibility-timeout").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("visibility timeout exceeded")
 				itemsForReprocessing = append(itemsForReprocessing, *item)
 			}
 		}
@@ -221,18 +225,17 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 			return nil, err
 		}
 	}
-	// update the record in ddb for processing, if we selected one
-	if selectedRecord != nil {
-		if err := ddbc.markRecordForProcessing(*selectedRecord); err != nil {
-			return nil, err
-		}
-	}
 
 	return selectedRecord, nil
 }
 
 func (ddbc *DDBConnection) markRecordForProcessing(record QueueRecord.QRecord) error {
 	timestamp := utils.GetCurrentTimeAWSFormatted()
+	target, err := ddbc.getRecord(record.Id)
+	if err != nil {
+		ddbc.logger.Err(err).Msg("failed to fetch sentinel record")
+		return err
+	}
 	// construct the visibility timeout
 	visibilityTimeout := utils.ConvertTimeAWSFormatted(time.Now().Add(30 * time.Second))
 
@@ -246,10 +249,11 @@ func (ddbc *DDBConnection) markRecordForProcessing(record QueueRecord.QRecord) e
 		Set(expression.Name("system_info.visibility_timeout_timestamp"), expression.Value(visibilityTimeout))
 	cond := expression.Equal(
 		expression.Name("system_info.version"),
-		expression.Value(aws.Int64(record.SystemInfo.Version)),
+		expression.Value(aws.Int64(target.SystemInfo.Version)),
 	)
 	expr, err := expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build()
 	if err != nil {
+		ddbc.logger.Err(err).Msg("failed to build processing expr")
 		return err
 	}
 	_, err = ddbc.Client.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
@@ -262,6 +266,10 @@ func (ddbc *DDBConnection) markRecordForProcessing(record QueueRecord.QRecord) e
 		ReturnValues:              types.ReturnValueAllNew,
 	})
 	if err != nil {
+		ddbc.logger.Err(err).Str("id", record.Id).
+			Int64("p-ver", record.SystemInfo.Version).
+			Int64("o-version", target.SystemInfo.Version).
+			Msg("failed to update processing record")
 		return err
 	}
 	return nil

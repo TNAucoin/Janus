@@ -1,16 +1,20 @@
 package main
 
 import (
-	"fmt"
 	"github.com/joho/godotenv"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
 	"github.com/tnaucoin/Janus/config"
+	"github.com/tnaucoin/Janus/internal/dynamo"
 	"github.com/tnaucoin/Janus/internal/mq"
 	"os"
+	"os/signal"
+	"sync"
 )
 
 var (
 	localEnvFile = "local.env"
+	workersCount = 10
 )
 
 func main() {
@@ -19,11 +23,15 @@ func main() {
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 	conf := config.New()
+	ddbclient, err := dynamo.New(*conf, logger)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to create ddb client")
+	}
 	conn, err := mq.ConnectRabbitMQ(conf.MQ.Protocol, conf.MQ.User, conf.MQ.Password, conf.MQ.Host, conf.MQ.VHost, conf.MQ.Port)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to connect to rabbitmq")
 	}
-	rmqc, err := mq.NewRabbitMQClient(conn)
+	rmqc, err := mq.NewRabbitMQClient(conn, logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to create client")
 	}
@@ -31,20 +39,62 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to consume messages")
 	}
-
-	var blocking chan struct{}
+	workers := make(chan struct{}, workersCount)
+	messagesInProgress := &sync.WaitGroup{}
+	shutDown := make(chan struct{})
 
 	go func() {
-		for message := range messageBus {
-			logger.Debug().Str("op", "message-received").Str("value", fmt.Sprintf("%v", message)).Msg("")
-			if err := message.Ack(false); err != nil {
-				logger.Err(err).Msgf("failed to ack message: %s", message.MessageId)
-				continue
+		osSignals := make(chan os.Signal, 1)
+		signal.Notify(osSignals, os.Interrupt)
+		<-osSignals
+		close(shutDown)
+	}()
+
+	go func() {
+		for {
+			select {
+			case <-shutDown:
+				return
+			case message, ok := <-messageBus:
+				if !ok {
+					return
+				}
+				workers <- struct{}{} //block if no free workers
+				messagesInProgress.Add(1)
+				go func(msg amqp.Delivery) {
+					recordID := doWork(msg, logger, ddbclient)
+					if recordID != "" {
+						if err := ddbclient.DequeueRecord(recordID); err != nil {
+							logger.Err(err).Msgf("failed to dequeue record %s", recordID)
+						} else {
+							logger.Debug().Msgf("dequeued: %s", recordID)
+						}
+					} else {
+						logger.Error().Msg("null record")
+					}
+					<-workers // release the worker block
+					messagesInProgress.Done()
+				}(message)
 			}
-			logger.Info().Str("op", "message-ack").Str("message-id", message.MessageId).Msg("succcessfully acknowledged message")
 		}
 	}()
 
 	logger.Info().Msg("consuming messages...")
-	<-blocking
+	<-shutDown                // block until interrupt signal is received
+	messagesInProgress.Wait() // block until all messages have been processed
+}
+
+func doWork(message amqp.Delivery, logger zerolog.Logger, ddbc *dynamo.DDBConnection) string {
+	//if !message.Redelivered {
+	//	message.Nack(false, true)
+	//	logger.Debug().Msgf("requeue message: %s", message.MessageId)
+	//	return
+	//}
+
+	if err := message.Ack(false); err != nil {
+		logger.Err(err).Msgf("failed to ack message: %s", message.MessageId)
+		return ""
+	}
+	logger.Info().Str("op", "message-ack").Str("message-id", message.MessageId).Msg("succcessfully acknowledged message")
+	return message.MessageId
 }

@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/rs/zerolog"
 )
 
 type RabbitClient struct {
-	conn *amqp.Connection
-	ch   *amqp.Channel
+	conn   *amqp.Connection
+	ch     *amqp.Channel
+	logger zerolog.Logger
 }
 
 func ConnectRabbitMQ(protocol, username, password, host, vhost string, port int) (*amqp.Connection, error) {
@@ -19,14 +21,20 @@ func ConnectRabbitMQ(protocol, username, password, host, vhost string, port int)
 	return conn, nil
 }
 
-func NewRabbitMQClient(conn *amqp.Connection) (RabbitClient, error) {
+// NewRabbitMQClient TODO: instead of creating a channel, we should make a new channel function, that accepts a channel input
+func NewRabbitMQClient(conn *amqp.Connection, logger zerolog.Logger) (RabbitClient, error) {
 	ch, err := conn.Channel()
 	if err != nil {
 		return RabbitClient{}, err
 	}
+	// Puts the channel into confirm mode
+	if err := ch.Confirm(false); err != nil {
+		return RabbitClient{}, err
+	}
 	return RabbitClient{
-		conn: conn,
-		ch:   ch,
+		conn:   conn,
+		ch:     ch,
+		logger: logger,
 	}, nil
 }
 
@@ -46,13 +54,18 @@ func (rc RabbitClient) CreateBinding(name, binding, exchange string) error {
 }
 
 func (rc RabbitClient) Send(ctx context.Context, exchange, routingKey string, options amqp.Publishing) error {
-	return rc.ch.PublishWithContext(ctx,
+	confirmation, err := rc.ch.PublishWithDeferredConfirmWithContext(ctx,
 		exchange,
 		routingKey,
 		true, // Message must return an error, this will make a failed send bounce back
 		false,
 		options,
 	)
+	if err != nil {
+		return err
+	}
+	rc.logger.Debug().Msgf("server confirmation: %d", confirmation.DeliveryTag)
+	return nil
 }
 func (rc RabbitClient) Consume(queue, consumer string, autoAck bool) (<-chan amqp.Delivery, error) {
 	return rc.ch.Consume(queue, consumer, autoAck, false, false, false, nil)
