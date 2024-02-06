@@ -25,6 +25,22 @@ var QStatusToString = map[QStatus]string{
 	Dlq:        "DLQ",
 }
 
+type QPriority int64
+
+const (
+	NONE QPriority = iota
+	LOW
+	MEDIUM
+	HIGH
+)
+
+var QPriorityToInt = map[QPriority]int64{
+	NONE:   0,
+	LOW:    10,
+	MEDIUM: 100,
+	HIGH:   200,
+}
+
 type QRecord struct {
 	Id         string       `dynamodbav:"id" json:"id"`
 	Priority   int64        `dynamodbav:"priority_timestamp" json:"priority"`
@@ -51,18 +67,23 @@ func IdToKeyExpr(id string) map[string]types.AttributeValue {
 	}
 }
 
-// NewQRecord creates a new QRecord object with the given ID.
-// It initializes the Priority field with the current time in the "2006-01-02T15:04:05.000Z07:00" format.
-// It also creates a new QSystemInfo object using the provided ID and current time,
-// and assigns it to the SystemInfo field of the QRecord.
-// The returned QRecord object contains the ID, Priority, and SystemInfo fields populated.
-func NewQRecord() *QRecord {
+// NewQRecord takes a recordPriority of type QPriority and returns a new QRecord pointer.
+// It generates a unique ID using uuid.New().String().
+// It gets the current time in milliseconds using utils.GetCurrentTimeInMilliseconds().
+// It gets the priority offset for the given recordPriority using utils.GetTimeInMillisecondsWithOffset(QPriorityToInt[recordPriority]).
+// It creates a new QSystemInfo object using the generated ID, current time, and recordPriority.
+// It initializes a new QRecord with the generated ID, priorityTime, and the created QSystemInfo object.
+// It returns the pointer to the newly created QRecord.
+func NewQRecord(recordPriority QPriority) *QRecord {
 	currentTime := utils.GetCurrentTimeInMilliseconds()
+	// Applies the priority offset to the current time
+	// This will give this record a higher/lower priority in queue
+	priorityTime := utils.GetTimeInMillisecondsWithOffset(QPriorityToInt[recordPriority])
 	id := uuid.New().String()
-	info := newSystemInfo(id, currentTime)
+	info := newSystemInfo(id, currentTime, recordPriority)
 	return &QRecord{
 		Id:         id,
-		Priority:   currentTime,
+		Priority:   priorityTime,
 		SystemInfo: info,
 	}
 }
@@ -72,7 +93,7 @@ func NewQRecord() *QRecord {
 // The Created field is set to the current time, the Priority field is set to the current time,
 // the QueueSelected field is set to false, the Queued field is set to 0, the Status field is set to "PENDING",
 // and the Version field is set to 1.
-func newSystemInfo(id string, currentTime int64) *QSystemInfo {
+func newSystemInfo(id string, currentTime int64, recordPriority QPriority) *QSystemInfo {
 	return &QSystemInfo{
 		Created:           currentTime,
 		Id:                id,
@@ -80,6 +101,7 @@ func newSystemInfo(id string, currentTime int64) *QSystemInfo {
 		QueueSelected:     false,
 		Queued:            0,
 		Status:            "PENDING",
+		PriorityOffset:    QPriorityToInt[recordPriority],
 		Reprocessed:       0,
 		Version:           1,
 		VisibilityTimeout: currentTime,

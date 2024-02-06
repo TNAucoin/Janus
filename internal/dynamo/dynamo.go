@@ -69,9 +69,6 @@ func (ddbc *DDBConnection) AddRecord(record *QueueRecord.QRecord) error {
 
 func (ddbc *DDBConnection) EnqueueRecord(id string, priority int) error {
 	record, err := ddbc.getRecord(id)
-	// Calculate the priority time, based on current time - offset, this will make the record older, resulting in
-	// it appearing higher in the order
-	priorityTime := utils.GetTimeInMillisecondsWithOffset(record.SystemInfo.PriorityOffset)
 	timestamp := utils.GetCurrentTimeInMilliseconds()
 	if err != nil {
 		return err
@@ -82,8 +79,8 @@ func (ddbc *DDBConnection) EnqueueRecord(id string, priority int) error {
 		Set(expression.Name("system_info.queue_added_timestamp"), expression.Value(timestamp)).
 		Set(expression.Name("system_info.queue_selected"), expression.Value(false)).
 		Set(expression.Name("system_info.status"), expression.Value(aws.String(QueueRecord.QStatusToString[QueueRecord.Ready]))).
-		Set(expression.Name("priority_timestamp"), expression.Value(priorityTime)).
-		Set(expression.Name("system_info.priority_timestamp"), expression.Value(priorityTime)).
+		Set(expression.Name("priority_timestamp"), expression.Value(record.Priority)).
+		Set(expression.Name("system_info.priority_timestamp"), expression.Value(record.Priority)).
 		Set(expression.Name("system_info.last_updated_timestamp"), expression.Value(timestamp)).
 		Add(expression.Name("system_info.version"), expression.Value(aws.Int64(1)))
 
@@ -163,7 +160,7 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 		IndexName:                 aws.String(ddbc.indexName),
 		KeyConditionExpression:    expr.Condition(),
 		Limit:                     aws.Int32(250),
-		ScanIndexForward:          aws.Bool(false),
+		ScanIndexForward:          aws.Bool(true),
 		ProjectionExpression:      aws.String("id, priority_timestamp, system_info"),
 	})
 	if err != nil {
