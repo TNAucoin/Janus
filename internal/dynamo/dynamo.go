@@ -69,7 +69,10 @@ func (ddbc *DDBConnection) AddRecord(record *QueueRecord.QRecord) error {
 
 func (ddbc *DDBConnection) EnqueueRecord(id string, priority int) error {
 	record, err := ddbc.getRecord(id)
-	timestamp := utils.GetCurrentTimeAWSFormatted()
+	// Calculate the priority time, based on current time - offset, this will make the record older, resulting in
+	// it appearing higher in the order
+	priorityTime := utils.GetTimeInMillisecondsWithOffset(record.SystemInfo.PriorityOffset)
+	timestamp := utils.GetCurrentTimeInMilliseconds()
 	if err != nil {
 		return err
 	}
@@ -79,13 +82,16 @@ func (ddbc *DDBConnection) EnqueueRecord(id string, priority int) error {
 		Set(expression.Name("system_info.queue_added_timestamp"), expression.Value(timestamp)).
 		Set(expression.Name("system_info.queue_selected"), expression.Value(false)).
 		Set(expression.Name("system_info.status"), expression.Value(aws.String(QueueRecord.QStatusToString[QueueRecord.Ready]))).
-		Set(expression.Name("last_updated_timestamp"), expression.Value(timestamp)).
+		Set(expression.Name("priority_timestamp"), expression.Value(priorityTime)).
+		Set(expression.Name("system_info.priority_timestamp"), expression.Value(priorityTime)).
 		Set(expression.Name("system_info.last_updated_timestamp"), expression.Value(timestamp)).
 		Add(expression.Name("system_info.version"), expression.Value(aws.Int64(1)))
+
 	cond := expression.Equal(
 		expression.Name("system_info.version"),
-		expression.Value(aws.Int64(record.SystemInfo.Version)),
+		expression.Value(aws.Uint(record.SystemInfo.Version)),
 	)
+
 	expr, err := expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build()
 	if err != nil {
 		return err
@@ -110,12 +116,11 @@ func (ddbc *DDBConnection) DequeueRecord(id string) error {
 	if err != nil {
 		return err
 	}
-	timestamp := utils.GetCurrentTimeAWSFormatted()
+	timestamp := utils.GetCurrentTimeInMilliseconds()
 	upd := expression.
 		Set(expression.Name("system_info.queue_selected"), expression.Value(false)).
-		Set(expression.Name("last_updated_timestamp"), expression.Value(timestamp)).
 		Set(expression.Name("system_info.last_updated_timestamp"), expression.Value(timestamp)).
-		Add(expression.Name("system_info.version"), expression.Value(aws.Int64(1))).
+		Add(expression.Name("system_info.version"), expression.Value(aws.Uint(1))).
 		Set(expression.Name("system_info.status"), expression.Value(aws.String(QueueRecord.QStatusToString[QueueRecord.Done]))).
 		Set(expression.Name("system_info.queue_remove_timestamp"), expression.Value(timestamp)).
 		Set(expression.Name("system_info.queued"), expression.Value(-1)).
@@ -123,8 +128,9 @@ func (ddbc *DDBConnection) DequeueRecord(id string) error {
 
 	cond := expression.Equal(
 		expression.Name("system_info.version"),
-		expression.Value(aws.Int64(record.SystemInfo.Version)),
+		expression.Value(aws.Uint(record.SystemInfo.Version)),
 	)
+
 	expr, err := expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build()
 	if err != nil {
 		return err
@@ -157,8 +163,8 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 		IndexName:                 aws.String(ddbc.indexName),
 		KeyConditionExpression:    expr.Condition(),
 		Limit:                     aws.Int32(250),
-		ScanIndexForward:          aws.Bool(true),
-		ProjectionExpression:      aws.String("id, last_updated_timestamp, system_info"),
+		ScanIndexForward:          aws.Bool(false),
+		ProjectionExpression:      aws.String("id, priority_timestamp, system_info"),
 	})
 	if err != nil {
 		return nil, err
@@ -176,7 +182,7 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 	for i := range queueRecords {
 		item := &queueRecords[i]
 		// Change the AWS Timestamp back into a go time object
-		visibilityTime, err := utils.ParseAWSFormattedTime(item.SystemInfo.VisibilityTimeout)
+		visibilityTime := utils.ParseUnixMilliToTime(item.SystemInfo.VisibilityTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -184,7 +190,7 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 		// send it to the DLQ
 		if item.SystemInfo.Reprocessed > ddbc.maxRetries {
 			// This item has exceeded the maximum number of retries, send it to the DLQ
-			ddbc.logger.Debug().Str("op", "peek-dlq").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("")
+			ddbc.logger.Debug().Str("op", "peek-dlq").Str("record-id", item.Id).Int64("record-modified-timestamp", item.Priority).Msg("")
 			itemsForDLQ = append(itemsForDLQ, *item)
 			continue
 		}
@@ -194,10 +200,10 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 			// This item is visible, check to see if it needs to be processed
 			// If False, this value hasn't been processed yet.
 			if !item.SystemInfo.QueueSelected {
-				//ddbc.logger.Debug().Str("op", "peek").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("")
+				//ddbc.logger.Debug().Str("op", "peek").Str("record-id", item.Id).Str("record-modified-timestamp", item.Priority).Msg("")
 				if selectedRecord == nil {
 					// This will be the next item to be processed
-					ddbc.logger.Debug().Str("op", "peek-selected").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("")
+					ddbc.logger.Debug().Str("op", "peek-selected").Str("record-id", item.Id).Int64("record-modified-timestamp", item.Priority).Msg("")
 					selectedRecord = item
 					if err := ddbc.markRecordForProcessing(*selectedRecord); err != nil {
 						return nil, err
@@ -206,7 +212,7 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 			} else {
 				// Visibility timeout has expired, and the Item never finished
 				// processing.
-				//ddbc.logger.Debug().Str("op", "peek-visibility-timeout").Str("record-id", item.Id).Str("record-modified-timestamp", item.LastUpdated).Msg("visibility timeout exceeded")
+				//ddbc.logger.Debug().Str("op", "peek-visibility-timeout").Str("record-id", item.Id).Str("record-modified-timestamp", item.Priority).Msg("visibility timeout exceeded")
 				itemsForReprocessing = append(itemsForReprocessing, *item)
 			}
 		}
@@ -230,26 +236,25 @@ func (ddbc *DDBConnection) Peek(priority int64) (*QueueRecord.QRecord, error) {
 }
 
 func (ddbc *DDBConnection) markRecordForProcessing(record QueueRecord.QRecord) error {
-	timestamp := utils.GetCurrentTimeAWSFormatted()
+	timestamp := utils.GetCurrentTimeInMilliseconds()
 	target, err := ddbc.getRecord(record.Id)
 	if err != nil {
 		ddbc.logger.Err(err).Msg("failed to fetch sentinel record")
 		return err
 	}
 	// construct the visibility timeout
-	visibilityTimeout := utils.ConvertTimeAWSFormatted(time.Now().Add(30 * time.Second))
+	visibilityTimeout := utils.ConvertTimeToUnixMilli(time.Now().Add(30 * time.Second))
 
 	upd := expression.
 		Set(expression.Name("system_info.queue_selected"), expression.Value(true)).
-		Set(expression.Name("last_updated_timestamp"), expression.Value(timestamp)).
 		Set(expression.Name("system_info.last_updated_timestamp"), expression.Value(timestamp)).
-		Add(expression.Name("system_info.version"), expression.Value(aws.Int64(1))).
+		Add(expression.Name("system_info.version"), expression.Value(aws.Uint(1))).
 		Set(expression.Name("system_info.status"), expression.Value(aws.String(QueueRecord.QStatusToString[QueueRecord.Processing]))).
 		Set(expression.Name("system_info.queue_peek_timestamp"), expression.Value(timestamp)).
 		Set(expression.Name("system_info.visibility_timeout_timestamp"), expression.Value(visibilityTimeout))
 	cond := expression.Equal(
 		expression.Name("system_info.version"),
-		expression.Value(aws.Int64(target.SystemInfo.Version)),
+		expression.Value(aws.Uint(target.SystemInfo.Version)),
 	)
 	expr, err := expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build()
 	if err != nil {
@@ -267,8 +272,8 @@ func (ddbc *DDBConnection) markRecordForProcessing(record QueueRecord.QRecord) e
 	})
 	if err != nil {
 		ddbc.logger.Err(err).Str("id", record.Id).
-			Int64("p-ver", record.SystemInfo.Version).
-			Int64("o-version", target.SystemInfo.Version).
+			Uint("p-ver", record.SystemInfo.Version).
+			Uint("o-version", target.SystemInfo.Version).
 			Msg("failed to update processing record")
 		return err
 	}
@@ -279,18 +284,17 @@ func (ddbc *DDBConnection) restoreRecords(records []QueueRecord.QRecord) error {
 	var updateExpressions []types.TransactWriteItem
 	for i := range records {
 		item := records[i]
-		timestamp := utils.GetCurrentTimeAWSFormatted()
+		timestamp := utils.GetCurrentTimeInMilliseconds()
 		upd := expression.
 			Set(expression.Name("system_info.queue_selected"), expression.Value(false)).
 			Set(expression.Name("system_info.visibility_timeout_timestamp"), expression.Value(timestamp)).
-			Set(expression.Name("last_updated_timestamp"), expression.Value(timestamp)).
 			Set(expression.Name("system_info.last_updated_timestamp"), expression.Value(timestamp)).
-			Add(expression.Name("system_info.version"), expression.Value(aws.Int64(1))).
+			Add(expression.Name("system_info.version"), expression.Value(aws.Uint(1))).
 			Add(expression.Name("system_info.reprocessed_count"), expression.Value(1)).
 			Set(expression.Name("system_info.status"), expression.Value(aws.String(QueueRecord.QStatusToString[QueueRecord.Ready])))
 		cond := expression.Equal(
 			expression.Name("system_info.version"),
-			expression.Value(aws.Int64(item.SystemInfo.Version)),
+			expression.Value(aws.Uint(item.SystemInfo.Version)),
 		)
 		expr, err := expression.NewBuilder().WithCondition(cond).WithUpdate(upd).Build()
 		if err != nil {
@@ -322,11 +326,10 @@ func (ddbc *DDBConnection) dlqRecords(records []QueueRecord.QRecord) error {
 	var updateExpressions []types.TransactWriteItem
 	for i := range records {
 		item := records[i]
-		timestamp := utils.GetCurrentTimeAWSFormatted()
+		timestamp := utils.GetCurrentTimeInMilliseconds()
 		upd := expression.
 			Set(expression.Name("system_info.queue_selected"), expression.Value(false)).
 			Set(expression.Name("system_info.visibility_timeout_timestamp"), expression.Value(timestamp)).
-			Set(expression.Name("last_updated_timestamp"), expression.Value(timestamp)).
 			Set(expression.Name("system_info.last_updated_timestamp"), expression.Value(timestamp)).
 			Add(expression.Name("system_info.version"), expression.Value(aws.Int64(1))).
 			Set(expression.Name("system_info.queued"), expression.Value(-1)).
@@ -334,7 +337,7 @@ func (ddbc *DDBConnection) dlqRecords(records []QueueRecord.QRecord) error {
 			Remove(expression.Name("queued"))
 		cond := expression.Equal(
 			expression.Name("system_info.version"),
-			expression.Value(aws.Int64(item.SystemInfo.Version)),
+			expression.Value(aws.Uint(item.SystemInfo.Version)),
 		)
 		expr, err := expression.NewBuilder().WithCondition(cond).WithUpdate(upd).Build()
 		if err != nil {

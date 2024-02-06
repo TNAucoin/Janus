@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/joho/godotenv"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -57,53 +58,57 @@ func main() {
 		if err != nil {
 			logger.Fatal().Err(err).Msg("failed to create the ddb table")
 		}
-		if err := rabbitClient.CreateChannel("job", false); err != nil {
+		if err := rabbitClient.CreateChannel("janus.job.events", false); err != nil {
 			logger.Err(err).Msg("failed to create channel.")
 		}
-		if err := rabbitClient.CreateQueue("job", "job_created", true, false); err != nil {
-			logger.Fatal().Err(err).Msg("")
-		}
-		if err := rabbitClient.CreateQueue("job", "job_test", false, true); err != nil {
-			logger.Fatal().Err(err).Msg("")
-		}
-		if err := rabbitClient.CreateBinding("job", "job_created", "job.created.*", "job_events"); err != nil {
-			logger.Fatal().Err(err).Msg("")
-		}
-		if err := rabbitClient.CreateBinding("job", "job_test", "job.*", "job_events"); err != nil {
-			logger.Fatal().Err(err).Msg("")
-		}
+		//if err := rabbitClient.CreateQueue("job", "job_created", true, false); err != nil {
+		//	logger.Fatal().Err(err).Msg("")
+		//}
+		//if err := rabbitClient.CreateQueue("job", "job_test", false, true); err != nil {
+		//	logger.Fatal().Err(err).Msg("")
+		//}
+		//if err := rabbitClient.CreateBinding("job", "job_created", "job.created.*", "job_events"); err != nil {
+		//	logger.Fatal().Err(err).Msg("")
+		//}
+		//if err := rabbitClient.CreateBinding("job", "job_test", "job.*", "job_events"); err != nil {
+		//	logger.Fatal().Err(err).Msg("")
+		//}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		var numJobs = 20
+		var numJobs = 1
 		for i := 0; i < numJobs; i++ {
 			record := CreateRecord(ddbclient, logger)
 			Enqueue(record.Id, 1, ddbclient, logger)
-		}
-		for i := 0; i < numJobs; i++ {
+			pRecord, err := json.Marshal(record)
+			if err != nil {
+				logger.Fatal().Err(err)
+			}
 			r, err := ddbclient.Peek(1)
 			if err != nil {
 				logger.Fatal().Msg("Failed to peek, for events")
 			}
-			if err := rabbitClient.Send(ctx, "job", "job_events", fmt.Sprintf("job.created.%d", i), amqp.Publishing{
+			if err := rabbitClient.Send(ctx, "janus.job.events", "job.events", fmt.Sprintf("job.created.%d", i), amqp.Publishing{
 				ContentType:  "text/plain",
 				DeliveryMode: amqp.Transient,
-				Body:         []byte("Some job message"),
+				Body:         pRecord,
 				MessageId:    r.Id,
 				Priority:     1,
 			}); err != nil {
 				logger.Fatal().Err(err).Msg("")
 			}
 		}
-		time.Sleep(30 * time.Second)
+
 		//r1 := CreateRecord(ddbclient, logger)
 		//Enqueue(r1.Id, 1, ddbclient, logger)
 		//r2 := CreateRecord(ddbclient, logger)
 		//Enqueue(r2.Id, 1, ddbclient, logger)
-		//p1, _ := ddbclient.Peek(1)
-		//if p1 != nil {
-		//	logger.Debug().Str("op", "peek-result").Str("record-id", p1.Id).Msg("")
-		//}
-		//Dequeue(p1.Id, ddbclient)
+		p1, _ := ddbclient.Peek(1)
+		if p1 != nil {
+			logger.Debug().Str("op", "peek-result").Str("record-id", p1.Id).Msg("")
+			Dequeue(p1.Id, ddbclient, logger)
+		}
+
+		time.Sleep(time.Second * 2)
 
 	}
 }

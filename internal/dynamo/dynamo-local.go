@@ -24,8 +24,8 @@ var LocalTableInput = func(tableName string, indexName string) *dynamodb.CreateT
 				AttributeType: types.ScalarAttributeTypeS,
 			},
 			{
-				AttributeName: aws.String("last_updated_timestamp"),
-				AttributeType: types.ScalarAttributeTypeS,
+				AttributeName: aws.String("priority_timestamp"),
+				AttributeType: types.ScalarAttributeTypeN,
 			},
 			{
 				AttributeName: aws.String("queued"),
@@ -47,7 +47,7 @@ var LocalTableInput = func(tableName string, indexName string) *dynamodb.CreateT
 						KeyType:       types.KeyTypeHash,
 					},
 					{
-						AttributeName: aws.String("last_updated_timestamp"),
+						AttributeName: aws.String("priority_timestamp"),
 						KeyType:       types.KeyTypeRange,
 					},
 				},

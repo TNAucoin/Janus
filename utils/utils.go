@@ -10,12 +10,18 @@ func GetCurrentTimeInMilliseconds() int64 {
 	return time.Now().UnixMilli()
 }
 
-func GetCurrentTimeAWSFormatted() string {
-	return time.Now().Format(timeLayout)
+func GetTimeInMillisecondsWithOffset(offset int64) int64 {
+	return time.Now().UnixMilli() - offset
 }
 
-func ConvertTimeAWSFormatted(t time.Time) string {
-	return t.Format(timeLayout)
+func ParseUnixMilliToTime(unixTime int64) time.Time {
+	seconds := unixTime / int64(1000)     // seconds
+	remainingMS := unixTime % int64(1000) // remaining ms
+	return time.Unix(seconds, remainingMS*int64(time.Millisecond))
+}
+
+func ConvertTimeToUnixMilli(time time.Time) int64 {
+	return time.UnixMilli()
 }
 
 func ParseAWSFormattedTime(timestamp string) (time.Time, error) {
