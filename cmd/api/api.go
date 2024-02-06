@@ -86,6 +86,7 @@ func main() {
 				logger.Err(err).Msgf("failed to enqueue record: %s", jobId)
 				return nil, err
 			}
+			logger.Debug().Str("enqueued", jobId).Int("queue-partiion", input.Body.QueuePartition).Msg("")
 		}
 		return resp, nil
 	})
