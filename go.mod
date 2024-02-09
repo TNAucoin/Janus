@@ -9,8 +9,11 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.12.16
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression v1.6.16
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.27.0
+	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/danielgtaylor/huma/v2 v2.4.0
+	github.com/gammazero/workerpool v1.1.3
 	github.com/go-chi/chi/v5 v5.0.11
+	github.com/go-chi/cors v1.2.1
 	github.com/google/uuid v1.6.0
 	github.com/joeshaw/envdecode v0.0.0-20200121155833-099f1fc765bd
 	github.com/joho/godotenv v1.5.1
@@ -36,6 +39,7 @@ require (
 	github.com/danielgtaylor/casing v1.0.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/fxamacker/cbor/v2 v2.5.0 // indirect
+	github.com/gammazero/deque v0.2.0 // indirect
 	github.com/go-chi/chi v4.1.2+incompatible // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect

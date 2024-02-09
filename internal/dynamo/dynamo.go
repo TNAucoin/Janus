@@ -2,6 +2,7 @@ package dynamo
 
 import (
 	"context"
+	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
@@ -67,11 +68,11 @@ func (ddbc *DDBConnection) AddRecord(record *QueueRecord.QRecord) error {
 	return nil
 }
 
-func (ddbc *DDBConnection) EnqueueRecord(id string, priority int) error {
+func (ddbc *DDBConnection) EnqueueRecord(id string, priority int) (*QueueRecord.QRecord, error) {
 	record, err := ddbc.getRecord(id)
 	timestamp := utils.GetCurrentTimeInMilliseconds()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	upd := expression.
 		Set(expression.Name("queued"), expression.Value(aws.Int(priority))).
@@ -91,9 +92,9 @@ func (ddbc *DDBConnection) EnqueueRecord(id string, priority int) error {
 
 	expr, err := expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = ddbc.dbClient.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+	resp, err := ddbc.dbClient.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
 		Key:                       QueueRecord.IdToKeyExpr(id),
 		TableName:                 aws.String(ddbc.tableName),
 		ExpressionAttributeNames:  expr.Names(),
@@ -102,10 +103,13 @@ func (ddbc *DDBConnection) EnqueueRecord(id string, priority int) error {
 		ConditionExpression:       expr.Condition(),
 		ReturnValues:              types.ReturnValueAllNew,
 	})
+	var updatedRecord QueueRecord.QRecord
+	err = attributevalue.UnmarshalMap(resp.Attributes, &updatedRecord)
+	fmt.Println(updatedRecord.SystemInfo.Status)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return &updatedRecord, nil
 }
 
 func (ddbc *DDBConnection) DequeueRecord(id string) error {
